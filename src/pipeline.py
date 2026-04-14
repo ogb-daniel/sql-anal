@@ -87,12 +87,13 @@ class AnalyticsPipeline:
         self.db_path = Path(db_path)
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
+        self.schema_context = self._load_schema()
 
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
         start = time.perf_counter()
 
         # Stage 1: SQL Generation
-        sql_gen_output = self.llm.generate_sql(question, {})
+        sql_gen_output = self.llm.generate_sql(question, self.schema_context)
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
@@ -150,3 +151,23 @@ class AnalyticsPipeline:
             timings=timings,
             total_llm_stats=total_llm_stats,
         )
+    def _load_schema(self) -> dict:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('PRAGMA table_info("gaming_mental_health")')
+            columns = [
+            {"name": row[1], "type": row[2]} 
+            for row in cursor.fetchall()
+            ]
+            cursor.execute('SELECT COUNT(*) FROM gaming_mental_health')
+            row_count = cursor.fetchone()[0]
+            sample_values = {}
+            for col in ["gender"]:
+                cursor.execute(f'SELECT DISTINCT "{col}" FROM gaming_mental_health LIMIT 20')
+                sample_values[col] = [r[0] for r in cursor.fetchall()]
+            return {
+            "table_name": "gaming_mental_health",
+            "columns": columns,
+            "row_count": row_count,
+            "sample_values": sample_values,
+            }
