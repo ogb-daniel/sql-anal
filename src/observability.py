@@ -7,7 +7,7 @@ from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, ConsoleSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import ConsoleMetricReader, PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 
 resource = Resource.create({"service.name": "sql-analytics-pipeline"})
@@ -29,7 +29,8 @@ if EXPORTER_TYPE == "otlp":
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
     metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter(), export_interval_millis=60000)
 else:
-    metric_reader = PeriodicExportingMetricReader(ConsoleMetricReader(), export_interval_millis=60000)
+    exporter = ConsoleMetricExporter()
+    metric_reader = PeriodicExportingMetricReader(exporter, export_interval_millis=60000)
 
 meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
 metrics.set_meter_provider(meter_provider)
