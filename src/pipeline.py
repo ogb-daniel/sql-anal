@@ -1,4 +1,5 @@
 from __future__ import annotations
+from src.observability import tracer, logger, request_counter, request_duration, token_counter, stage_duration
 
 import sqlite3
 import time
