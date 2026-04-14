@@ -140,10 +140,10 @@ Describe how you approached this assignment and what key problems you identified
 Include your before/after benchmark results here.
 
 **Baseline (if you measured):**
-- Average latency: `___ ms`
-- p50 latency: `___ ms`
-- p95 latency: `___ ms`
-- Success rate: `___ %`
+- Average latency: `280.29 ms`
+- p50 latency: `190.49 ms`
+- p95 latency: `279.16 ms`
+- Success rate: `0.0 %`
 
 **Your solution:**
 - Average latency: `___ ms`
