@@ -140,9 +140,9 @@ Describe how you approached this assignment and what key problems you identified
 Include your before/after benchmark results here.
 
 **Baseline (if you measured):**
-- Average latency: `280.29 ms`
-- p50 latency: `190.49 ms`
-- p95 latency: `279.16 ms`
+- Average latency: `11526.74 ms`
+- p50 latency: `10470.18 ms`
+- p95 latency: `21488.08 ms`
 - Success rate: `0.0 %`
 
 **Your solution:**
