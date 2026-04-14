@@ -33,8 +33,14 @@ class OpenRouterLLMClient:
             stream=False,
         )
 
-        # TODO: Implement token counting here
         # Required for efficiency evaluation - see README.md for details.
+        usage = getattr(res, "usage", None)
+        if usage:
+            self._stats["prompt_tokens"] += int(getattr(usage, "prompt_tokens", 0) or 0)
+            self._stats["completion_tokens"] += int(getattr(usage, "completion_tokens", 0) or 0)
+            self._stats["total_tokens"] += int(getattr(usage, "total_tokens", 0) or 0)
+        self._stats["llm_calls"] += 1
+
 
         choices = getattr(res, "choices", None) or []
         if not choices:
