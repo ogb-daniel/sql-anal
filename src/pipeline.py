@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
-
+import re
 from src.llm_client import OpenRouterLLMClient, build_default_llm_client
 from src.types import (
     SQLValidationOutput,
@@ -21,8 +21,12 @@ class SQLValidationError(Exception):
 
 
 class SQLValidator:
-    @classmethod
-    def validate(cls, sql: str | None) -> SQLValidationOutput:
+    FORBIDDEN_KEYWORDS = {"DELETE", "DROP", "UPDATE", "INSERT", "ALTER", "CREATE", 
+                          "TRUNCATE", "REPLACE", "MERGE", "GRANT", "REVOKE", "EXEC"}
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+
+    def validate(self, sql: str | None) -> SQLValidationOutput:
         start = time.perf_counter()
 
         if sql is None:
@@ -33,9 +37,36 @@ class SQLValidator:
                 timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        # TODO: Implement SQL validation logic
         # Consider what validation is needed for this use case
+        # Allow only SELECT
+        sql_upper = sql.strip().upper()
+        first_keyword = sql_upper.split()[0] if sql_upper.split() else ""
+        if first_keyword != "SELECT":
+            return SQLValidationOutput(
+                is_valid=False, validated_sql=None,
+                error=f"Only SELECT queries are allowed. Got: {first_keyword}",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+        
+        # Check for forbidden keywords
+        for keyword in self.FORBIDDEN_KEYWORDS:
+            if re.search(rf'\b{keyword}\b', sql_upper):
+                return SQLValidationOutput(
+                    is_valid=False, validated_sql=None,
+                    error=f"Forbidden keyword '{keyword}' found in query",
+                    timing_ms=(time.perf_counter() - start) * 1000,
+                )
 
+        # use EXPLAIN to verify syntax
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(f"EXPLAIN QUERY PLAN {sql}")
+        except sqlite3.Error as e:
+            return SQLValidationOutput(
+                is_valid=False, validated_sql=None,
+                error=f"SQL syntax error: {e}",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
         return SQLValidationOutput(
             is_valid=True,
             validated_sql=sql,
@@ -88,6 +119,7 @@ class AnalyticsPipeline:
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
         self.schema_context = self._load_schema()
+        self.validator = SQLValidator(self.db_path) 
 
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
         start = time.perf_counter()
@@ -97,7 +129,8 @@ class AnalyticsPipeline:
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
-        validation_output = SQLValidator.validate(sql)
+        validation_output = self.validator.validate(sql)
+
         if not validation_output.is_valid:
             sql = None
 

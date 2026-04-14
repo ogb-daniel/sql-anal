@@ -86,8 +86,8 @@ class OpenRouterLLMClient:
         f"Sample values for key columns:\n{samples_str}\n\n"
         "Rules:\n"
         "1. Use ONLY the table and columns listed above.\n"
-        "2. Always include a LIMIT clause for queries that could return many rows.\n"
-        "3. Use exact column names as listed (case-sensitive).\n\n"
+        # "2. Always include a LIMIT clause for queries that could return many rows.\n"
+        "2. Use exact column names as listed (case-sensitive).\n\n"
         "Respond with ONLY a JSON object in this exact format:\n"
         '{"sql": "<your SELECT query>", "answerable": true}\n\n'
         "If the question CANNOT be answered with the available columns:\n"
