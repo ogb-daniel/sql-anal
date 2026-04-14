@@ -151,6 +151,7 @@ class AnalyticsPipeline:
             timings=timings,
             total_llm_stats=total_llm_stats,
         )
+        
     def _load_schema(self) -> dict:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()

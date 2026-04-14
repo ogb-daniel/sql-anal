@@ -45,30 +45,50 @@ class OpenRouterLLMClient:
         return content.strip()
 
     @staticmethod
-    def _extract_sql(text: str) -> str | None:
+    def _extract_sql(text: str) -> tuple[str | None, bool]:
         maybe_json = text.strip()
         if maybe_json.startswith("{") and maybe_json.endswith("}"):
             try:
                 parsed = json.loads(maybe_json)
+                answerable = parsed.get("answerable", True)
                 sql = parsed.get("sql")
+                if not answerable or sql is None:
+                    return None, False
                 if isinstance(sql, str) and sql.strip():
-                    return sql.strip()
-                return None
+                    return sql.strip().rstrip(";"), True
+                return None, False
             except json.JSONDecodeError:
                 pass
         lower = text.lower()
         idx = lower.find("select ")
         if idx >= 0:
-            return text[idx:].strip()
-        return None
+            return text[idx:].strip().rstrip(";"), True
+        return None, False
 
     def generate_sql(self, question: str, context: dict) -> SQLGenerationOutput:
-        system_prompt = (
-            "You are a SQL assistant. "
-            "Generate SQLite SELECT queries from natural language questions. "
-            "Return your response in a format that can be parsed to extract the SQL."
+        columns_str = ", ".join(
+        f"{c['name']} ({c['type']})" for c in context.get("columns", [])
         )
-        user_prompt = f"Context: {context}\n\nQuestion: {question}\n\nGenerate a SQL query to answer this question."
+        sample_values = context.get("sample_values", {})
+        samples_str = "\n".join(
+        f"  {col}: {vals}" for col, vals in sample_values.items()
+        )
+        system_prompt = (
+        "You are a SQL assistant for a SQLite database with exactly ONE table.\n\n"
+        f"Table: {context.get('table_name', 'gaming_mental_health')}\n"
+        f"Columns: {columns_str}\n\n"
+        f"Sample values for key columns:\n{samples_str}\n\n"
+        "Rules:\n"
+        "1. Use ONLY the table and columns listed above.\n"
+        "2. Always include a LIMIT clause for queries that could return many rows.\n"
+        "3. Use exact column names as listed (case-sensitive).\n\n"
+        "Respond with ONLY a JSON object in this exact format:\n"
+        '{"sql": "<your SELECT query>", "answerable": true}\n\n'
+        "If the question CANNOT be answered with the available columns:\n"
+        '{"sql": null, "answerable": false}\n\n'
+        "Output ONLY the JSON object. No explanations, no markdown."
+        )
+        user_prompt = f"Question: {question}\n\nGenerate a SQL query to answer this question."
 
         start = time.perf_counter()
         error = None
@@ -80,7 +100,9 @@ class OpenRouterLLMClient:
                 temperature=0.0,
                 max_tokens=240,
             )
-            sql = self._extract_sql(text)
+            sql, answerable = self._extract_sql(text)
+            if not answerable:
+                error = "Question cannot be answered"
         except Exception as exc:
             error = str(exc)
 
