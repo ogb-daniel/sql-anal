@@ -25,31 +25,43 @@ class OpenRouterLLMClient:
         self._client = OpenRouter(api_key=api_key)
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-    def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
-        res = self._client.chat.send(
-            messages=messages,
-            model=self.model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=False,
-        )
+    def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int, retries: int = 2) -> str:
+        for attempt in range(retries + 1):
+            try:
+                res = self._client.chat.send(
+                    messages=messages,
+                    model=self.model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=False,
+                )
 
-        # Required for efficiency evaluation - see README.md for details.
-        usage = getattr(res, "usage", None)
-        if usage:
-            self._stats["prompt_tokens"] += int(getattr(usage, "prompt_tokens", 0) or 0)
-            self._stats["completion_tokens"] += int(getattr(usage, "completion_tokens", 0) or 0)
-            self._stats["total_tokens"] += int(getattr(usage, "total_tokens", 0) or 0)
-        self._stats["llm_calls"] += 1
+                # Required for efficiency evaluation - see README.md for details.
+                usage = getattr(res, "usage", None)
+                if usage:
+                    self._stats["prompt_tokens"] += int(getattr(usage, "prompt_tokens", 0) or 0)
+                    self._stats["completion_tokens"] += int(getattr(usage, "completion_tokens", 0) or 0)
+                    self._stats["total_tokens"] += int(getattr(usage, "total_tokens", 0) or 0)
+                self._stats["llm_calls"] += 1
 
 
-        choices = getattr(res, "choices", None) or []
-        if not choices:
-            raise RuntimeError("OpenRouter response contained no choices.")
-        content = getattr(getattr(choices[0], "message", None), "content", None)
-        if not isinstance(content, str):
-            raise RuntimeError("OpenRouter response content is not text.")
-        return content.strip()
+                choices = getattr(res, "choices", None) or []
+                if not choices:
+                    raise RuntimeError("OpenRouter response contained no choices.")
+                content = getattr(getattr(choices[0], "message", None), "content", None)
+                if not isinstance(content, str):
+                    raise RuntimeError("OpenRouter response content is not text.")
+                return content.strip()
+            except Exception as exc:
+                if attempt < retries and self._is_retryable(exc):
+                    time.sleep(2 ** attempt) 
+                    continue
+                raise
+
+    @staticmethod
+    def _is_retryable(exc):
+        error_str = str(exc).lower()
+        return any(term in error_str for term in ["rate limit", "timeout", "502", "503", "529"])
 
     @staticmethod
     def _extract_sql(text: str) -> tuple[str | None, bool]:
