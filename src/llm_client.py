@@ -4,6 +4,7 @@ import json
 import os
 import time
 from typing import Any
+from src.observability import  logger
 
 from src.types import SQLGenerationOutput, AnswerGenerationOutput
 
@@ -86,10 +87,12 @@ class OpenRouterLLMClient:
         f"Sample values for key columns:\n{samples_str}\n\n"
         "Rules:\n"
         "1. Use ONLY the table and columns listed above.\n"
-        # "2. Always include a LIMIT clause for queries that could return many rows.\n"
-        "2. Use exact column names as listed (case-sensitive).\n\n"
+        "2. When a question involves subjective terms like 'high', 'low', 'younger', 'older', "
+        "use reasonable thresholds or comparisons. Only mark as unanswerable if the required "
+        "data columns fundamentally do not exist.\n"
+        "3. Use exact column names as listed (case-sensitive).\n\n"
         "Respond with ONLY a JSON object in this exact format:\n"
-        '{"sql": "<your SELECT query>", "answerable": true}\n\n'
+        '{"sql": "<your query>", "answerable": true}\n\n'
         "If the question CANNOT be answered with the available columns:\n"
         '{"sql": null, "answerable": false}\n\n'
         "Output ONLY the JSON object. No explanations, no markdown."
@@ -104,13 +107,14 @@ class OpenRouterLLMClient:
             text = self._chat(
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.0,
-                max_tokens=240,
+                max_tokens=350,
             )
             sql, answerable = self._extract_sql(text)
             if not answerable:
                 error = "Question cannot be answered"
         except Exception as exc:
             error = str(exc)
+            logger.error(error)
 
         timing_ms = (time.perf_counter() - start) * 1000
         llm_stats = self.pop_stats()
