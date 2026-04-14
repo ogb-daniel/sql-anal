@@ -74,14 +74,16 @@ class OpenRouterLLMClient:
                 if not answerable or sql is None:
                     return None, False
                 if isinstance(sql, str) and sql.strip():
-                    return sql.strip().rstrip(";"), True
+                    sql = sql.strip().rstrip(";").split(";")[0].strip()
+                    return sql, True
                 return None, False
             except json.JSONDecodeError:
                 pass
         lower = text.lower()
         idx = lower.find("select ")
         if idx >= 0:
-            return text[idx:].strip().rstrip(";"), True
+            sql = text[idx:].strip().rstrip(";").split(";")[0].strip()
+            return sql, True
         return None, False
 
     def generate_sql(self, question: str, context: dict) -> SQLGenerationOutput:
@@ -119,7 +121,7 @@ class OpenRouterLLMClient:
             text = self._chat(
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.0,
-                max_tokens=350,
+                max_tokens=500,
             )
             sql, answerable = self._extract_sql(text)
             if not answerable:
