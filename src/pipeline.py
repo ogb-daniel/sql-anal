@@ -29,7 +29,7 @@ class SQLValidator:
 
     def validate(self, sql: str | None) -> SQLValidationOutput:
         start = time.perf_counter()
-
+        
         if sql is None:
             return SQLValidationOutput(
                 is_valid=False,
@@ -157,12 +157,51 @@ class AnalyticsPipeline:
                 execution_output = self.executor.run(sql)
                 stage_duration.record(execution_output.timing_ms, {"stage": "sql_execution"})
                 rows = execution_output.rows
+            
+            #one shot retry
+            if (not validation_output.is_valid or execution_output.error) and sql_gen_output.sql is not None:
+                logger.warning("SQL failed, attempting retry", extra={
+                    "request_id": request_id,
+                    "error": validation_output.error or execution_output.error,
+                })
+                
+                retry_prompt = (
+                    f"{question}\n\n"
+                    f"Previous attempt failed.\n"
+                    f"Previous SQL: {sql_gen_output.sql}\n"
+                    f"Error: {validation_output.error or execution_output.error}\n"
+                    f"Generate a corrected query."
+                )
+                with tracer.start_as_current_span("sql_generation_retry"):
+                    sql_gen_retry = self.llm.generate_sql(retry_prompt, self.schema_context)
+                    if sql_gen_retry.sql:
+                        with tracer.start_as_current_span("sql_validation_retry"):
+                            validation_retry = self.validator.validate(sql_gen_retry.sql)
+                            if validation_retry.is_valid:
+                                with tracer.start_as_current_span("sql_execution_retry"):
+                                    execution_retry = self.executor.run(validation_retry.validated_sql)
+                                    if not execution_retry.error:
+                                        sql = validation_retry.validated_sql
+                                        validation_output = validation_retry
+                                        execution_output = execution_retry
+                                        rows = execution_retry.rows
 
+                                        sql_gen_output.llm_stats["llm_calls"] += sql_gen_retry.llm_stats.get("llm_calls", 0)
+                                        sql_gen_output.llm_stats["prompt_tokens"] += sql_gen_retry.llm_stats.get("prompt_tokens", 0)
+                                        sql_gen_output.llm_stats["completion_tokens"] += sql_gen_retry.llm_stats.get("completion_tokens", 0)
+                                        sql_gen_output.llm_stats["total_tokens"] += sql_gen_retry.llm_stats.get("total_tokens", 0)
+                                        sql_gen_output.intermediate_outputs.append({
+                                            "retry": True,
+                                            "sql": sql_gen_retry.sql,
+                                            "llm_stats": sql_gen_retry.llm_stats,
+                                        })
+                                        logger.info("Retry succeeded", extra={"request_id": request_id, "sql": sql})
+                         
             # Stage 4: Answer Generation
             with tracer.start_as_current_span("answer_generation"):
                 answer_output = self.llm.generate_answer(question, sql, rows)
                 stage_duration.record(answer_output.timing_ms, {"stage": "answer_generation"})
-
+                        
             # Determine status
             status = "success"
             if sql_gen_output.sql is None and sql_gen_output.error:
