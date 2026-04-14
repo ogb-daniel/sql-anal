@@ -1,5 +1,5 @@
 from __future__ import annotations
-from src.observability import tracer, logger, request_counter, request_duration, token_counter, stage_duration
+from src.observability import tracer, logger, request_counter, request_duration, token_counter, stage_duration, sql_validation_failures
 
 import sqlite3
 import time
@@ -123,68 +123,101 @@ class AnalyticsPipeline:
         self.validator = SQLValidator(self.db_path) 
 
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
-        start = time.perf_counter()
+        with tracer.start_as_current_span("pipeline.run") as span:
+            span.set_attribute("question", question)
+            span.set_attribute("request_id", request_id or "")
+            request_counter.add(1)
+            logger.info("Pipeline started", extra={"request_id": request_id})
 
-        # Stage 1: SQL Generation
-        sql_gen_output = self.llm.generate_sql(question, self.schema_context)
-        sql = sql_gen_output.sql
+            start = time.perf_counter()
 
-        # Stage 2: SQL Validation
-        validation_output = self.validator.validate(sql)
+            # Stage 1: SQL Generation
+            with tracer.start_as_current_span("sql_generation"):
+                sql_gen_output = self.llm.generate_sql(question, self.schema_context)
+                stage_duration.record(sql_gen_output.timing_ms, {"stage": "sql_generation"})
+                sql = sql_gen_output.sql
+                logger.info("SQL generated", extra={
+                "request_id": request_id, "stage": "sql_generation",
+                "sql": sql, "duration_ms": round(sql_gen_output.timing_ms, 2),
+                })
 
-        if not validation_output.is_valid:
-            sql = None
+            # Stage 2: SQL Validation
+            with tracer.start_as_current_span("sql_validation"):
+                validation_output = self.validator.validate(sql)
+                stage_duration.record(validation_output.timing_ms, {"stage": "sql_validation"})
+                if not validation_output.is_valid:
+                    sql = None
+                    sql_validation_failures.add(1)
+                    logger.warning("SQL validation failed", extra={
+                    "request_id": request_id, "error": validation_output.error,
+                    })
 
-        # Stage 3: SQL Execution
-        execution_output = self.executor.run(sql)
-        rows = execution_output.rows
+            # Stage 3: SQL Execution
+            with tracer.start_as_current_span("sql_execution"):
+                execution_output = self.executor.run(sql)
+                stage_duration.record(execution_output.timing_ms, {"stage": "sql_execution"})
+                rows = execution_output.rows
 
-        # Stage 4: Answer Generation
-        answer_output = self.llm.generate_answer(question, sql, rows)
+            # Stage 4: Answer Generation
+            with tracer.start_as_current_span("answer_generation"):
+                answer_output = self.llm.generate_answer(question, sql, rows)
+                stage_duration.record(answer_output.timing_ms, {"stage": "answer_generation"})
 
-        # Determine status
-        status = "success"
-        if sql_gen_output.sql is None and sql_gen_output.error:
-            status = "unanswerable"
-        elif not validation_output.is_valid:
-            status = "invalid_sql"
-        elif execution_output.error:
-            status = "error"
-        elif sql is None:
-            status = "unanswerable"
+            # Determine status
+            status = "success"
+            if sql_gen_output.sql is None and sql_gen_output.error:
+                status = "unanswerable"
+            elif not validation_output.is_valid:
+                status = "invalid_sql"
+            elif execution_output.error:
+                status = "error"
+            elif sql is None:
+                status = "unanswerable"
 
-        # Build timings aggregate
-        timings = {
-            "sql_generation_ms": sql_gen_output.timing_ms,
-            "sql_validation_ms": validation_output.timing_ms,
-            "sql_execution_ms": execution_output.timing_ms,
-            "answer_generation_ms": answer_output.timing_ms,
-            "total_ms": (time.perf_counter() - start) * 1000,
-        }
+            # Build timings aggregate
+            timings = {
+                "sql_generation_ms": sql_gen_output.timing_ms,
+                "sql_validation_ms": validation_output.timing_ms,
+                "sql_execution_ms": execution_output.timing_ms,
+                "answer_generation_ms": answer_output.timing_ms,
+                "total_ms": (time.perf_counter() - start) * 1000,
+            }
 
-        # Build total LLM stats
-        total_llm_stats = {
-            "llm_calls": sql_gen_output.llm_stats.get("llm_calls", 0) + answer_output.llm_stats.get("llm_calls", 0),
-            "prompt_tokens": sql_gen_output.llm_stats.get("prompt_tokens", 0) + answer_output.llm_stats.get("prompt_tokens", 0),
-            "completion_tokens": sql_gen_output.llm_stats.get("completion_tokens", 0) + answer_output.llm_stats.get("completion_tokens", 0),
-            "total_tokens": sql_gen_output.llm_stats.get("total_tokens", 0) + answer_output.llm_stats.get("total_tokens", 0),
-            "model": sql_gen_output.llm_stats.get("model", "unknown"),
-        }
+            # Build total LLM stats
+            total_llm_stats = {
+                "llm_calls": sql_gen_output.llm_stats.get("llm_calls", 0) + answer_output.llm_stats.get("llm_calls", 0),
+                "prompt_tokens": sql_gen_output.llm_stats.get("prompt_tokens", 0) + answer_output.llm_stats.get("prompt_tokens", 0),
+                "completion_tokens": sql_gen_output.llm_stats.get("completion_tokens", 0) + answer_output.llm_stats.get("completion_tokens", 0),
+                "total_tokens": sql_gen_output.llm_stats.get("total_tokens", 0) + answer_output.llm_stats.get("total_tokens", 0),
+                "model": sql_gen_output.llm_stats.get("model", "unknown"),
+            }
 
-        return PipelineOutput(
-            status=status,
-            question=question,
-            request_id=request_id,
-            sql_generation=sql_gen_output,
-            sql_validation=validation_output,
-            sql_execution=execution_output,
-            answer_generation=answer_output,
-            sql=sql,
-            rows=rows,
-            answer=answer_output.answer,
-            timings=timings,
-            total_llm_stats=total_llm_stats,
-        )
+            total_ms = (time.perf_counter() - start) * 1000
+            request_duration.record(total_ms)
+            token_counter.add(total_llm_stats.get("total_tokens", 0))
+            span.set_attribute("status", status)
+            span.set_attribute("total_tokens", total_llm_stats.get("total_tokens", 0))
+
+            logger.info("Pipeline completed", extra={
+            "request_id": request_id, "status": status,
+            "duration_ms": round(total_ms, 2),
+            "tokens": total_llm_stats.get("total_tokens", 0),
+            })
+
+            return PipelineOutput(
+                status=status,
+                question=question,
+                request_id=request_id,
+                sql_generation=sql_gen_output,
+                sql_validation=validation_output,
+                sql_execution=execution_output,
+                answer_generation=answer_output,
+                sql=sql,
+                rows=rows,
+                answer=answer_output.answer,
+                timings=timings,
+                total_llm_stats=total_llm_stats,
+            )
         
     def _load_schema(self) -> dict:
         with sqlite3.connect(self.db_path) as conn:
