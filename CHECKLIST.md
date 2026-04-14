@@ -24,7 +24,7 @@ Describe how you approached this assignment and what key problems you identified
 
 **What was your approach?**
 ```
-Systematic, test-driven approach across 10 work streams:
+Systematic, test-driven approach across 10 areas:
 1. Captured baseline metrics first (0% success, ~11.5s avg latency).
 2. Fixed the critical path: schema context extraction from SQLite, prompt rewriting with
    full column metadata, and structured JSON response format.
