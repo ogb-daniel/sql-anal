@@ -1,5 +1,6 @@
 from __future__ import annotations
 from src.observability import tracer, logger, request_counter, request_duration, token_counter, stage_duration, sql_validation_failures
+from src.conversation import ConversationSession
 
 import sqlite3
 import time
@@ -257,6 +258,19 @@ class AnalyticsPipeline:
                 timings=timings,
                 total_llm_stats=total_llm_stats,
             )
+    def run_with_session(self, question: str, session: ConversationSession,
+                     request_id: str | None = None) -> PipelineOutput:
+        if session.has_history():
+            context_prompt = session.get_context_prompt()
+            augmented_question = f"{context_prompt}\n\nFollow-up question: {question}"
+        else:
+            augmented_question = question
+        
+        result = self.run(augmented_question, request_id)
+        session.add_turn(question, result.sql, result.answer, result.rows)
+        result.question = question
+        return result
+
         
     def _load_schema(self) -> dict:
         with sqlite3.connect(self.db_path) as conn:
